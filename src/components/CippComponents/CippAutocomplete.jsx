@@ -14,19 +14,25 @@ import { Sync } from "@mui/icons-material";
 import { Stack } from "@mui/system";
 import React from "react";
 
-const MemoTextField = React.memo(function MemoTextField({ params, label, ...otherProps }) {
+const MemoTextField = React.memo(function MemoTextField({
+  params,
+  label,
+  placeholder,
+  ...otherProps
+}) {
   const { InputProps, ...otherParams } = params;
 
   return (
     <TextField
       {...otherParams}
       label={label}
-      variant="outlined"
+      placeholder={placeholder}
       {...otherProps}
       slotProps={{
         inputLabel: {
           shrink: true,
           sx: { transition: "none" },
+          required: otherProps.required,
         },
         input: {
           ...InputProps,
@@ -62,6 +68,9 @@ export const CippAutoComplete = (props) => {
     required = false,
     isFetching = false,
     sx,
+    removeOptions = [],
+    sortOptions = false,
+    preselectedValue,
     ...other
   } = props;
 
@@ -92,7 +101,7 @@ export const CippAutoComplete = (props) => {
       setGetRequestInfo({
         url: api.url,
         data: {
-          ...(!api.excludeTenantFilter ? { TenantFilter: currentTenant } : null),
+          ...(!api.excludeTenantFilter ? { tenantFilter: currentTenant } : null),
           ...api.data,
         },
         waiting: true,
@@ -158,15 +167,46 @@ export const CippAutoComplete = (props) => {
           };
         });
         setUsedOptions(convertedOptions);
+        if (preselectedValue && !defaultValue && !value && convertedOptions.length > 0) {
+          const preselectedOption = convertedOptions.find(
+            (option) => option.value === preselectedValue
+          );
+
+          if (preselectedOption) {
+            const newValue = multiple ? [preselectedOption] : preselectedOption;
+            if (onChange) {
+              onChange(newValue, newValue?.addedFields);
+            }
+          }
+        }
       }
     }
 
     if (actionGetRequest.isError) {
       setUsedOptions([{ label: getCippError(actionGetRequest.error), value: "error" }]);
     }
-  }, [api, actionGetRequest.data, actionGetRequest.isSuccess, actionGetRequest.isError]);
+  }, [
+    api,
+    actionGetRequest.data,
+    actionGetRequest.isSuccess,
+    actionGetRequest.isError,
+    preselectedValue,
+    defaultValue,
+    value,
+    multiple,
+    onChange,
+  ]);
 
-  const memoizedOptions = useMemo(() => (api ? usedOptions : options), [api, usedOptions, options]);
+  const memoizedOptions = useMemo(() => {
+    let finalOptions = api ? usedOptions : options;
+    if (removeOptions && removeOptions.length) {
+      finalOptions = finalOptions.filter((o) => !removeOptions.includes(o.value));
+    }
+    if (sortOptions) {
+      finalOptions.sort((a, b) => a.label?.localeCompare(b.label));
+    }
+    return finalOptions;
+  }, [api, usedOptions, options, removeOptions]);
 
   const rand = Math.random().toString(36).substring(5);
 
@@ -187,6 +227,7 @@ export const CippAutoComplete = (props) => {
       disableClearable={disableClearable}
       multiple={multiple}
       fullWidth
+      placeholder={placeholder}
       filterOptions={(options, params) => {
         const filtered = filter(options, params);
         const isExisting =
@@ -194,7 +235,6 @@ export const CippAutoComplete = (props) => {
           options.some(
             (option) => params.inputValue === option.value || params.inputValue === option.label
           );
-
         if (params.inputValue !== "" && creatable && !isExisting) {
           filtered.push({
             label: `Add option: "${params.inputValue}"`,
@@ -261,7 +301,13 @@ export const CippAutoComplete = (props) => {
       sx={sx}
       renderInput={(params) => (
         <Stack direction="row" spacing={1}>
-          <MemoTextField params={params} label={label} {...other} />
+          <MemoTextField
+            params={params}
+            label={label}
+            placeholder={placeholder}
+            required={required}
+            {...other}
+          />
           {api?.url && api?.showRefresh && (
             <IconButton
               size="small"
