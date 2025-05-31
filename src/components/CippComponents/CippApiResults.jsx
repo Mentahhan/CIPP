@@ -1,16 +1,30 @@
-import { Close, ContentCopy } from "@mui/icons-material";
-import { Alert, CircularProgress, Collapse, IconButton, Typography } from "@mui/material";
-import { useEffect, useState, useMemo } from "react";
+import { Close, Download } from "@mui/icons-material";
+import {
+  Alert,
+  CircularProgress,
+  Collapse,
+  IconButton,
+  Stack,
+  Typography,
+  Box,
+  SvgIcon,
+  Tooltip,
+} from "@mui/material";
+import { useEffect, useState, useMemo, useCallback } from "react";
 import { getCippError } from "../../utils/get-cipp-error";
 import { CippCopyToClipBoard } from "./CippCopyToClipboard";
-import { Grid } from "@mui/system";
+import React from "react";
+import { CippTableDialog } from "./CippTableDialog";
+import { EyeIcon } from "@heroicons/react/24/outline";
+import { useDialog } from "../../hooks/use-dialog";
+import { useRouter } from "next/router";
 
 const extractAllResults = (data) => {
   const results = [];
 
   const getSeverity = (text) => {
     if (typeof text !== "string") return "success";
-    return /error|failed|exception|not found/i.test(text) ? "error" : "success";
+    return /error|failed|exception|not found|invalid_grant/i.test(text) ? "error" : "success";
   };
 
   const processResultItem = (item) => {
@@ -24,7 +38,7 @@ const extractAllResults = (data) => {
 
     if (item && typeof item === "object") {
       const text = item.resultText || "";
-      const copyField = item.copyField || text;
+      const copyField = item.copyField || "";
       const severity =
         typeof item.state === "string" ? item.state : getSeverity(item) ? "error" : "success";
 
@@ -33,6 +47,7 @@ const extractAllResults = (data) => {
           text,
           copyField,
           severity,
+          ...item,
         };
       }
     }
@@ -58,7 +73,7 @@ const extractAllResults = (data) => {
         results.push(processed);
       }
     } else {
-      const ignoreKeys = ["metadata", "Metadata"];
+      const ignoreKeys = ["metadata", "Metadata", "severity"];
 
       if (typeof obj === "object") {
         Object.keys(obj).forEach((key) => {
@@ -106,6 +121,8 @@ export const CippApiResults = (props) => {
   const [errorVisible, setErrorVisible] = useState(false);
   const [fetchingVisible, setFetchingVisible] = useState(false);
   const [finalResults, setFinalResults] = useState([]);
+  const tableDialog = useDialog();
+  const pageTitle = `${document.title} - Results`;
   const correctResultObj = useMemo(() => {
     if (!apiObject.isSuccess) return;
 
@@ -136,17 +153,17 @@ export const CippApiResults = (props) => {
   const allResults = useMemo(() => {
     const apiResults = extractAllResults(correctResultObj);
     return apiResults;
-  }, [apiObject]);
+  }, [correctResultObj]);
 
   useEffect(() => {
     setErrorVisible(!!apiObject.isError);
 
+    if (apiObject.isFetching || (apiObject.isIdle === false && apiObject.isPending === true)) {
+      setFetchingVisible(true);
+    } else {
+      setFetchingVisible(false);
+    }
     if (!errorsOnly) {
-      if (apiObject.isFetching || (apiObject.isIdle === false && apiObject.isPending === true)) {
-        setFetchingVisible(true);
-      } else {
-        setFetchingVisible(false);
-      }
       if (allResults.length > 0) {
         setFinalResults(
           allResults.map((res, index) => ({
@@ -155,6 +172,7 @@ export const CippApiResults = (props) => {
             copyField: res.copyField,
             severity: res.severity,
             visible: true,
+            ...res,
           }))
         );
       } else {
@@ -170,16 +188,37 @@ export const CippApiResults = (props) => {
     errorsOnly,
   ]);
 
-  const handleCloseResult = (id) => {
+  const handleCloseResult = useCallback((id) => {
     setFinalResults((prev) => prev.map((r) => (r.id === id ? { ...r, visible: false } : r)));
-  };
+  }, []);
+
+  const handleDownloadCsv = useCallback(() => {
+    if (!finalResults?.length) return;
+
+    const baseName = document.title.toLowerCase().replace(/[^a-z0-9]/g, "-");
+    const fileName = `${baseName}-results.csv`;
+
+    const headers = Object.keys(finalResults[0]);
+    const rows = finalResults.map((item) =>
+      headers.map((header) => `"${item[header] || ""}"`).join(",")
+    );
+    const csvContent = [headers.join(","), ...rows].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.setAttribute("href", url);
+    link.setAttribute("download", fileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  }, [finalResults, apiObject]);
 
   const hasVisibleResults = finalResults.some((r) => r.visible);
   return (
-    <>
+    <Stack spacing={2}>
       {/* Loading alert */}
       {!errorsOnly && (
-        <Collapse in={fetchingVisible}>
+        <Collapse in={fetchingVisible} unmountOnExit>
           <Alert
             sx={alertSx}
             action={
@@ -201,9 +240,8 @@ export const CippApiResults = (props) => {
           </Alert>
         </Collapse>
       )}
-
       {/* Error alert */}
-      <Collapse in={errorVisible}>
+      <Collapse in={errorVisible} unmountOnExit>
         {apiObject.isError && (
           <Alert
             sx={alertSx}
@@ -227,10 +265,10 @@ export const CippApiResults = (props) => {
 
       {/* Individual result alerts */}
       {apiObject.isSuccess && !errorsOnly && hasVisibleResults && (
-        <Grid container spacing={2}>
+        <>
           {finalResults.map((resultObj) => (
-            <Grid item size={12} key={resultObj.id}>
-              <Collapse in={resultObj.visible}>
+            <React.Fragment key={resultObj.id}>
+              <Collapse in={resultObj.visible} unmountOnExit>
                 <Alert
                   sx={alertSx}
                   variant="filled"
@@ -252,10 +290,37 @@ export const CippApiResults = (props) => {
                   {resultObj.text}
                 </Alert>
               </Collapse>
-            </Grid>
+            </React.Fragment>
           ))}
-        </Grid>
+        </>
       )}
-    </>
+      {(apiObject.isSuccess || apiObject.isError) &&
+      finalResults?.length > 0 &&
+      hasVisibleResults ? (
+        <Box display="flex" flexDirection="row">
+          <Tooltip title="View Results">
+            <IconButton onClick={() => tableDialog.handleOpen()}>
+              <SvgIcon>
+                <EyeIcon />
+              </SvgIcon>
+            </IconButton>
+          </Tooltip>
+          <Tooltip title="Download Results">
+            <IconButton aria-label="download-csv" onClick={handleDownloadCsv}>
+              <Download />
+            </IconButton>
+          </Tooltip>
+        </Box>
+      ) : null}
+      {tableDialog.open && (
+        <CippTableDialog
+          createDialog={tableDialog}
+          title={pageTitle}
+          data={finalResults}
+          noCard={true}
+          simpleColumns={["severity", "text", "copyField"]}
+        />
+      )}
+    </Stack>
   );
 };
